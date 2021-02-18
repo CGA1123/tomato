@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/CGA1123/tomato"
+	"github.com/soellman/pidfile"
 )
 
 func run(listener net.Listener) error {
@@ -41,6 +42,12 @@ func main() {
 		os.RemoveAll(tomato.Socket)
 		log.Printf("👋")
 	}()
+
+	if err := pidfile.WriteControl(tomato.PidFile, os.Getpid(), true); err != nil {
+		log.Printf("error: %v", err)
+		return
+	}
+	defer pidfile.Remove(tomato.PidFile)
 
 	f, err := os.Create(tomato.LogFile)
 	if err != nil {

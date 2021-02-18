@@ -7,21 +7,22 @@ import (
 )
 
 // TODO: add flags and parse them, implement cli
-// TODO: move server starting into here, add pidfile, auto fork and detach if
-// cli cmd runs and server is not running.
 func main() {
 	log.SetFlags(0)
+	log.SetPrefix(tomato.LogPrefix)
 
 	client, err := tomato.NewClient(tomato.Socket)
 	if err != nil {
 		log.Printf("error creating client: %v", err)
+		log.Printf("is the server running? start it with tomato-server")
 		return
 	}
 
 	ends, err := client.Start()
 	if err != nil {
 		if err.Error() == tomato.ErrTomatoIsRunning.Error() {
-			log.Printf("tomato is till running! use tomato stop or tomato start -f")
+			log.Printf("tomato is still running!")
+			log.Printf("use tomato stop or tomato start -f")
 		} else {
 			log.Printf("error: %v", err)
 		}
