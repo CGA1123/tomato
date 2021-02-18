@@ -52,7 +52,7 @@ func (s *State) Stop() time.Duration {
 	s.mut.Lock()
 	defer s.mut.Unlock()
 
-	timeLeft := s.ends.Sub(time.Now())
+	timeLeft := time.Until(s.ends)
 
 	s.tomato = nil
 	s.ends = time.Time{}
@@ -68,7 +68,7 @@ func (s *State) Remaining() time.Duration {
 		return time.Duration(0)
 	}
 
-	return s.ends.Sub(time.Now())
+	return time.Until(s.ends)
 }
 
 func (s *State) IsDone() bool {
