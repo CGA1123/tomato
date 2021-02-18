@@ -6,6 +6,9 @@ import (
 	"github.com/CGA1123/tomato"
 )
 
+// TODO: add flags and parse them, implement cli
+// TODO: move server starting into here, add pidfile, auto fork and detach if
+// cli cmd runs and server is not running.
 func main() {
 	log.SetFlags(0)
 

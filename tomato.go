@@ -13,6 +13,7 @@ var (
 	ErrTomatoIsRunning = fmt.Errorf("tomato is still runnning")
 	Socket             = "/tmp/tomato.sock"
 	LogFile            = "/tmp/tomato.log"
+	PidFile            = "/tmp/tomato.pid"
 	LogPrefix          = "🍅 "
 )
 
