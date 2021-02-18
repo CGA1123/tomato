@@ -1,45 +1,70 @@
-// tomato-server entrypoint creates the tomato rpc server to be used interacted
-// with by the tomato CLI
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/CGA1123/tomato"
 )
 
-const (
-	Tomato = "🍅"
-	Socket = "/tmp/tomato.sock"
-)
+func run(listener net.Listener) error {
+	errorC := make(chan error, 1)
+	shutdownC := make(chan os.Signal, 1)
 
-type Ping struct{}
+	go func(errC chan<- error) {
+		errorC <- http.Serve(listener, nil)
+	}(errorC)
 
-func (p Ping) Do(str string, reply *string) error {
-	log.Printf("%s got: %s", Tomato, str)
-	*reply = str
+	signal.Notify(shutdownC, syscall.SIGINT, syscall.SIGTERM)
 
-	return nil
+	select {
+	case err := <-errorC:
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+
+		return err
+	case <-shutdownC:
+		return nil
+	}
 }
 
 func main() {
-	log.Println(fmt.Sprintf("%s Starting server at [%s]...", Tomato, Socket))
+	defer func() {
+		log.Printf("Shutting down...")
+		log.Printf("Removing socket...")
+		os.RemoveAll(tomato.Socket)
+		log.Printf("👋")
+	}()
 
-	ping := &Ping{}
-	if err := rpc.Register(ping); err != nil {
-		log.Printf("%s Failed to register rpc: %e", Tomato, err)
-		return
+	f, err := os.Create(tomato.LogFile)
+	if err != nil {
+		log.Printf("error creating logfile: %v", err)
 	}
 
+	log.Printf("Will write logs to: %v", tomato.LogFile)
+	log.SetOutput(f)
+	log.SetPrefix(tomato.LogPrefix)
+
+	log.Printf("Starting server at [%s]...", tomato.Socket)
+
+	server := tomato.NewRPCServer(tomato.NewState())
+	rpc.RegisterName("Tomato", server)
 	rpc.HandleHTTP()
 
-	listener, err := net.Listen("unix", Socket)
+	listener, err := net.Listen("unix", tomato.Socket)
 	if err != nil {
-		log.Printf("%s Error opening socket: %e", Tomato, err)
+		log.Printf("Error opening socket: %v", err)
 		return
 	}
 
-	http.Serve(listener, nil)
+	if err := run(listener); err != nil {
+		log.Printf("error running server: %v", err)
+		return
+	}
 }

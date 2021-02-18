@@ -1,73 +1,157 @@
 package tomato
 
-import "time"
+import (
+	"fmt"
+	"log"
+	"net/rpc"
+	"sync"
+	"time"
+)
 
 var (
-	shortRest    = 5 * time.Minute
-	longRest     = 15 * time.Minute
-	focus        = 25 * time.Minute
-	maxIteration = 4
+	Duration           = 25 * time.Minute
+	ErrTomatoIsRunning = fmt.Errorf("tomato is still runnning")
+	Socket             = "/tmp/tomato.sock"
+	LogFile            = "/tmp/tomato.log"
+	LogPrefix          = "🍅 "
 )
 
-type Tomato struct {
-	focus  time.Duration
-	end    time.Time
-	timer  *time.Timer
-	cancel chan (struct{})
+type Tomato interface {
+	Start() (endsAt time.Time, err error)
+	Stop() (timeRemaining time.Duration)
+	Remaining() (timeRemaining time.Duration)
+	IsDone() bool
 }
 
-func NewTomato(focus time.Duration) *Tomato {
-	return &Tomato{focus: focus, cancel: make(chan struct{})}
+type State struct {
+	mut    sync.Mutex
+	ends   time.Time
+	tomato *time.Timer
 }
 
-func (t *Tomato) Start(f func()) {
-	t.timer = time.AfterFunc(t.focus, f)
-	t.end = time.Now()
+func NewState() *State {
+	return &State{}
 }
 
-func (t *Tomato) Done() time.Duration {
-	if t.Stop() {
-		return 0 * time.Nanosecond
+func (s *State) Start() (time.Time, error) {
+	s.mut.Lock()
+	defer s.mut.Unlock()
+
+	if s.tomato != nil {
+		return time.Time{}, ErrTomatoIsRunning
 	}
 
-	return t.end.Sub(time.Now())
+	s.ends = time.Now().Add(Duration)
+	s.tomato = time.AfterFunc(Duration, func() { s.Stop() })
+
+	return s.ends, nil
 }
 
-func (t *Tomato) Stop() bool {
-	stopped := t.timer.Stop()
-	if !stopped {
-		<-t.timer.C
+func (s *State) Stop() time.Duration {
+	s.mut.Lock()
+	defer s.mut.Unlock()
+
+	timeLeft := s.ends.Sub(time.Now())
+
+	s.tomato = nil
+	s.ends = time.Time{}
+
+	return timeLeft
+}
+
+func (s *State) Remaining() time.Duration {
+	s.mut.Lock()
+	defer s.mut.Unlock()
+
+	if s.tomato == nil {
+		return time.Duration(0)
 	}
 
-	return stopped
+	return s.ends.Sub(time.Now())
 }
 
-func (t *Tomato) Reset() {
-	t.Stop()
-	t.timer.Reset(t.focus)
+func (s *State) IsDone() bool {
+	return s.tomato == nil
 }
 
-type Rest int
-
-const (
-	Short Rest = iota
-	Long
-)
-
-type Notepad struct {
-	iterations int
+type RPCServer struct {
+	tomato Tomato
 }
 
-func NewNotepad() *Notepad {
-	return &Notepad{}
+func NewRPCServer(tomato Tomato) *RPCServer {
+	return &RPCServer{tomato: tomato}
 }
 
-func (n *Notepad) Check() Rest {
-	n.iterations += 1
+func (s *RPCServer) Start(args int, reply *time.Time) error {
+	log.Printf("got Start")
 
-	if n.iterations%maxIteration == 0 {
-		return Long
-	} else {
-		return Short
+	endTime, err := s.tomato.Start()
+	*reply = endTime
+
+	return err
+}
+
+func (s *RPCServer) Stop(args int, reply *time.Duration) error {
+	log.Printf("got Stop")
+
+	*reply = s.tomato.Stop()
+
+	return nil
+}
+
+func (s *RPCServer) Remaining(args int, reply *time.Duration) error {
+	log.Printf("got Remaining")
+
+	*reply = s.tomato.Remaining()
+
+	return nil
+}
+
+func (s *RPCServer) IsDone(args int, reply *bool) error {
+	log.Printf("got IsDone")
+
+	*reply = s.tomato.IsDone()
+
+	return nil
+}
+
+type RPCClient struct {
+	client *rpc.Client
+}
+
+func NewClient(socket string) (*RPCClient, error) {
+	client, err := rpc.DialHTTP("unix", socket)
+	if err != nil {
+		return nil, err
 	}
+
+	return &RPCClient{client: client}, nil
+}
+
+func (c *RPCClient) Start() (time.Time, error) {
+	var endsAt time.Time
+	err := c.client.Call("Tomato.Start", 0, &endsAt)
+
+	return endsAt, err
+}
+
+func (c *RPCClient) Stop() (time.Duration, error) {
+	var left time.Duration
+	err := c.client.Call("Tomato.Stop", 0, &left)
+
+	return left, err
+}
+
+func (c *RPCClient) Remaining() (time.Duration, error) {
+	var left time.Duration
+	err := c.client.Call("Tomato.Remaining", 0, &left)
+
+	return left, err
+}
+
+func (c *RPCClient) IsDone() (bool, error) {
+	var done bool
+	err := c.client.Call("Tomato.IsDone", 0, &done)
+
+	return done, err
 }

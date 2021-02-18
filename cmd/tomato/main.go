@@ -2,21 +2,28 @@ package main
 
 import (
 	"log"
-	"net/rpc"
+
+	"github.com/CGA1123/tomato"
 )
 
 func main() {
-	client, err := rpc.DialHTTP("unix", "/tmp/tomato.sock")
+	log.SetFlags(0)
+
+	client, err := tomato.NewClient(tomato.Socket)
 	if err != nil {
-		log.Printf("error: %e", err)
+		log.Printf("error creating client: %v", err)
 		return
 	}
 
-	var reply string
-	if err := client.Call("Ping.Do", "ping", &reply); err != nil {
-		log.Printf("error: %e", err)
+	ends, err := client.Start()
+	if err != nil {
+		if err.Error() == tomato.ErrTomatoIsRunning.Error() {
+			log.Printf("tomato is till running! use tomato stop or tomato start -f")
+		} else {
+			log.Printf("error: %v", err)
+		}
 		return
 	}
 
-	log.Printf("got: %s", reply)
+	log.Printf("got: %v", ends)
 }
