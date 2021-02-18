@@ -46,6 +46,7 @@ func main() {
 	if err != nil {
 		log.Printf("error creating logfile: %v", err)
 	}
+	defer f.Close()
 
 	log.Printf("Will write logs to: %v", tomato.LogFile)
 	log.SetOutput(f)
