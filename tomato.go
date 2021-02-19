@@ -28,53 +28,50 @@ var (
 	LogPrefix          = "🍅 "
 )
 
-type Tomato interface {
-	Start() (endsAt time.Time, err error)
-	Stop() (timeRemaining time.Duration)
-	Remaining() (timeRemaining time.Duration)
-	IsDone() bool
-}
-
-type State struct {
+type Tomato struct {
 	mut    sync.Mutex
 	ends   time.Time
 	tomato *time.Timer
 }
 
-func NewState() *State {
-	return &State{}
+func NewTomato() *Tomato {
+	return &Tomato{}
 }
 
-func (s *State) Start() (time.Time, error) {
+func (s *Tomato) do(action string, f func() error) error {
 	s.mut.Lock()
 	defer s.mut.Unlock()
 
-	if s.tomato != nil {
-		return time.Time{}, ErrTomatoIsRunning
+	log.Printf("Got %s", action)
+
+	return f()
+}
+
+func (s *Tomato) stop() time.Duration {
+	if s.tomato == nil {
+		return time.Duration(0)
 	}
 
+	remaining := s.remaining()
+
+	s.tomato = nil
+	s.ends = time.Now()
+
+	return remaining
+}
+
+func (s *Tomato) start() (time.Time, error) {
+	if s.tomato != nil {
+		return time.Now(), ErrTomatoIsRunning
+	}
+
+	s.tomato = time.AfterFunc(Duration, func() { s.stop() })
 	s.ends = time.Now().Add(Duration)
-	s.tomato = time.AfterFunc(Duration, func() { s.Stop() })
 
 	return s.ends, nil
 }
 
-func (s *State) Stop() time.Duration {
-	s.mut.Lock()
-	defer s.mut.Unlock()
-
-	timeLeft := time.Until(s.ends)
-
-	s.tomato = nil
-	s.ends = time.Time{}
-
-	return timeLeft
-}
-
-func (s *State) Remaining() time.Duration {
-	s.mut.Lock()
-	defer s.mut.Unlock()
-
+func (s *Tomato) remaining() time.Duration {
 	if s.tomato == nil {
 		return time.Duration(0)
 	}
@@ -82,49 +79,30 @@ func (s *State) Remaining() time.Duration {
 	return time.Until(s.ends)
 }
 
-func (s *State) IsDone() bool {
-	return s.tomato == nil
+func (s *Tomato) Start(args int, reply *time.Time) error {
+	return s.do("Start", func() error {
+		ends, err := s.start()
+
+		*reply = ends
+
+		return err
+	})
 }
 
-type Server struct {
-	tomato Tomato
+func (s *Tomato) Stop(args int, reply *time.Duration) error {
+	return s.do("Start", func() error {
+		*reply = s.stop()
+
+		return nil
+	})
 }
 
-func NewServer(tomato Tomato) *Server {
-	return &Server{tomato: tomato}
-}
+func (s *Tomato) Remaining(args int, reply *time.Duration) error {
+	return s.do("Start", func() error {
+		*reply = s.remaining()
 
-func (s *Server) Start(args int, reply *time.Time) error {
-	log.Printf("got Start")
-
-	endTime, err := s.tomato.Start()
-	*reply = endTime
-
-	return err
-}
-
-func (s *Server) Stop(args int, reply *time.Duration) error {
-	log.Printf("got Stop")
-
-	*reply = s.tomato.Stop()
-
-	return nil
-}
-
-func (s *Server) Remaining(args int, reply *time.Duration) error {
-	log.Printf("got Remaining")
-
-	*reply = s.tomato.Remaining()
-
-	return nil
-}
-
-func (s *Server) IsDone(args int, reply *bool) error {
-	log.Printf("got IsDone")
-
-	*reply = s.tomato.IsDone()
-
-	return nil
+		return nil
+	})
 }
 
 type Client struct {
@@ -159,13 +137,6 @@ func (c *Client) Remaining() (time.Duration, error) {
 	err := c.client.Call("Tomato.Remaining", 0, &left)
 
 	return left, err
-}
-
-func (c *Client) IsDone() (bool, error) {
-	var done bool
-	err := c.client.Call("Tomato.IsDone", 0, &done)
-
-	return done, err
 }
 
 func serverRunning() bool {
@@ -214,7 +185,6 @@ var Commands map[string]func() error = map[string]func() error{
 	"start":     WithClient(Start),
 	"stop":      WithClient(Stop),
 	"remaining": WithClient(Remaining),
-	"done":      WithClient(Done),
 	"server":    Server}
 
 func WithClient(f func(*Client) error) func() error {
@@ -265,21 +235,6 @@ func Remaining(c *Client) error {
 	return nil
 }
 
-var ErrNotDone = errors.New("not done")
-
-func Done(c *Client) error {
-	ok, err := c.IsDone()
-	if err != nil {
-		return err
-	}
-
-	if !ok {
-		return ErrNotDone
-	}
-
-	return nil
-}
-
 func Server() error {
 	defer func() {
 		log.Printf("Shutting down...")
@@ -305,8 +260,8 @@ func Server() error {
 
 	log.Printf("Starting server at [%s]...", Socket)
 
-	server := NewServer(NewState())
-	rpc.RegisterName("Tomato", server)
+	server := NewTomato()
+	rpc.Register(server)
 	rpc.HandleHTTP()
 
 	listener, err := net.Listen("unix", Socket)
@@ -354,29 +309,28 @@ func client() (*Client, error) {
 	return c, err
 }
 
+func usage() {
+	log.Printf("usage: tomato {start,stop,remaining,server}")
+}
+
 func main() {
 	var exitCode int
 	defer func() { os.Exit(exitCode) }()
 
 	if len(os.Args) != 2 {
 		exitCode = 1
-		log.Printf("usage: tomato {start,stop,remaining,done}")
+		usage()
 		return
 	}
 
 	cmd, ok := Commands[os.Args[1]]
 	if !ok {
 		exitCode = 1
-		log.Printf("usage: tomato {start,stop,remaining,done}")
+		usage()
 		return
 	}
 
 	if err := cmd(); err != nil {
-		if err == ErrNotDone {
-			exitCode = 3
-			return
-		}
-
 		log.Printf("error: %v", err)
 		exitCode = 1
 		return
