@@ -202,7 +202,8 @@ var Commands map[string]func() error = map[string]func() error{
 	"remaining": WithClient(Remaining),
 	"running":   WithClient(Running),
 	"kill":      Kill,
-	"server":    Server}
+	"server":    Server,
+	"help":      Help}
 
 var ErrNotRunning = errors.New("not running")
 
@@ -215,6 +216,11 @@ func WithClient(f func(*Client) error) func() error {
 
 		return f(client)
 	}
+}
+
+func Help() error {
+	usage()
+	return nil
 }
 
 func Kill() error {
@@ -360,7 +366,7 @@ func client() (*Client, error) {
 }
 
 func usage() {
-	log.Printf("usage: tomato {start,stop,remaining,server,running,kill}")
+	log.Printf("usage: tomato {start,stop,remaining,server,running,kill,help}")
 }
 
 func main() {
