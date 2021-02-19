@@ -6,6 +6,8 @@
 
 ## `tomato`
 
+Install: `go get github.com/CGA1123/tomato`
+
 There are a couple of subcommands:
 
 - `help`: prints usage information
