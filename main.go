@@ -388,7 +388,7 @@ func client() (*Client, error) {
 }
 
 func usage() {
-	log.Printf("usage: tomato {start,stop,remaining,server,running,kill,help}")
+	log.Printf("usage: tomato [-quiet] {start,stop,remaining,server,running,kill,help}")
 }
 
 func main() {
