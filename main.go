@@ -90,7 +90,7 @@ func (s *Tomato) Start(args int, reply *time.Time) error {
 }
 
 func (s *Tomato) Stop(args int, reply *time.Duration) error {
-	return s.do("Start", func() error {
+	return s.do("Stop", func() error {
 		*reply = s.stop()
 
 		return nil
@@ -98,8 +98,16 @@ func (s *Tomato) Stop(args int, reply *time.Duration) error {
 }
 
 func (s *Tomato) Remaining(args int, reply *time.Duration) error {
-	return s.do("Start", func() error {
+	return s.do("Remaining", func() error {
 		*reply = s.remaining()
+
+		return nil
+	})
+}
+
+func (s *Tomato) Running(args int, reply *bool) error {
+	return s.do("Running", func() error {
+		*reply = s.tomato != nil
 
 		return nil
 	})
@@ -137,6 +145,13 @@ func (c *Client) Remaining() (time.Duration, error) {
 	err := c.client.Call("Tomato.Remaining", 0, &left)
 
 	return left, err
+}
+
+func (c *Client) Running() (bool, error) {
+	var running bool
+	err := c.client.Call("Tomato.Running", 0, &running)
+
+	return running, err
 }
 
 func serverRunning() bool {
@@ -185,7 +200,11 @@ var Commands map[string]func() error = map[string]func() error{
 	"start":     WithClient(Start),
 	"stop":      WithClient(Stop),
 	"remaining": WithClient(Remaining),
+	"running":   WithClient(Running),
+	"kill":      Kill,
 	"server":    Server}
+
+var ErrNotRunning = errors.New("not running")
 
 func WithClient(f func(*Client) error) func() error {
 	return func() error {
@@ -196,6 +215,37 @@ func WithClient(f func(*Client) error) func() error {
 
 		return f(client)
 	}
+}
+
+func Kill() error {
+	if !serverRunning() {
+		return errors.New("server is not running!")
+	}
+
+	pid, err := pidfileContents(PidFile)
+	if err != nil {
+		return nil
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return nil
+	}
+
+	return process.Signal(syscall.SIGTERM)
+}
+
+func Running(c *Client) error {
+	running, err := c.Running()
+	if err != nil {
+		return err
+	}
+
+	if !running {
+		return ErrNotRunning
+	}
+
+	return nil
 }
 
 func Start(c *Client) error {
@@ -214,7 +264,7 @@ func Stop(c *Client) error {
 		return err
 	}
 
-	log.Printf("there was %v left on the clock!", left)
+	log.Printf("there was %.0f minute(s) left on the clock!", left.Round(time.Minute).Minutes())
 	return nil
 }
 
@@ -231,33 +281,33 @@ func Remaining(c *Client) error {
 		return nil
 	}
 
-	log.Printf("there is %v left on the clock!", left)
+	log.Printf("there are %.0f minutes left on the clock!", left.Round(time.Minute).Minutes())
 	return nil
 }
 
 func Server() error {
-	defer func() {
-		log.Printf("Shutting down...")
-		log.Printf("Removing socket...")
-		os.RemoveAll(Socket)
-		log.Printf("👋")
-	}()
-
 	if err := pidfile.WriteControl(PidFile, os.Getpid(), true); err != nil {
 		return err
 	}
-	defer pidfile.Remove(PidFile)
 
 	f, err := os.Create(LogFile)
 	if err != nil {
 		log.Printf("error creating logfile: %v", err)
 	}
-	defer f.Close()
+
+	defer func() {
+		log.Printf("Shutting down...")
+		log.Printf("Removing pidfile...")
+		pidfile.Remove(PidFile)
+		log.Printf("Removing socket...")
+		os.RemoveAll(Socket)
+		log.Printf("👋")
+		f.Close()
+	}()
 
 	log.Printf("Will write logs to: %v", LogFile)
 	log.SetOutput(f)
 	log.SetPrefix(LogPrefix)
-
 	log.Printf("Starting server at [%s]...", Socket)
 
 	server := NewTomato()
@@ -310,7 +360,7 @@ func client() (*Client, error) {
 }
 
 func usage() {
-	log.Printf("usage: tomato {start,stop,remaining,server}")
+	log.Printf("usage: tomato {start,stop,remaining,server,running,kill}")
 }
 
 func main() {
@@ -331,6 +381,11 @@ func main() {
 	}
 
 	if err := cmd(); err != nil {
+		if err == ErrNotRunning {
+			exitCode = 33
+			return
+		}
+
 		log.Printf("error: %v", err)
 		exitCode = 1
 		return
