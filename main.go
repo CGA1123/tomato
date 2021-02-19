@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -205,6 +206,7 @@ var Commands map[string]func() error = map[string]func() error{
 	"server":    Server,
 	"help":      Help}
 
+var Quiet = false
 var ErrNotRunning = errors.New("not running")
 
 func WithClient(f func(*Client) error) func() error {
@@ -260,7 +262,13 @@ func Start(c *Client) error {
 		return err
 	}
 
-	log.Printf("timer will finish at %v", finish)
+	fmtd := finish.Format("15:04")
+	if Quiet {
+		fmt.Println(fmtd)
+	} else {
+		log.Printf("timer will finish at %v", fmtd)
+	}
+
 	return nil
 }
 
@@ -270,7 +278,14 @@ func Stop(c *Client) error {
 		return err
 	}
 
-	log.Printf("there was %.0f minute(s) left on the clock!", left.Round(time.Minute).Minutes())
+	minutes := left.Round(time.Minute).Minutes()
+
+	if Quiet {
+		fmt.Printf("%.0f\n", minutes)
+	} else {
+		log.Printf("there was %.0f minute(s) left on the clock!", minutes)
+	}
+
 	return nil
 }
 
@@ -281,13 +296,22 @@ func Remaining(c *Client) error {
 	}
 
 	if left == time.Duration(0) {
-		log.Printf("the clock was not running!")
-		log.Printf("use `tomato start` to get going.")
-
+		if Quiet {
+			fmt.Println("0")
+		} else {
+			log.Printf("the clock was not running!")
+			log.Printf("use `tomato start` to get going.")
+		}
 		return nil
 	}
 
-	log.Printf("there are %.0f minutes left on the clock!", left.Round(time.Minute).Minutes())
+	minutes := left.Round(time.Minute).Minutes()
+
+	if Quiet {
+		fmt.Printf("%.0f\n", minutes)
+	} else {
+		log.Printf("there are %.0f minutes left on the clock!", minutes)
+	}
 	return nil
 }
 
@@ -351,9 +375,7 @@ func client() (*Client, error) {
 	log.SetPrefix(LogPrefix)
 
 	if !serverRunning() {
-		log.Printf("tomato server is not running")
-		log.Printf("you need to start it before attempting to use tomato")
-		return nil, errors.New("")
+		return nil, errors.New("tomato server is not running")
 	}
 
 	c, err := NewClient(Socket)
@@ -373,13 +395,10 @@ func main() {
 	var exitCode int
 	defer func() { os.Exit(exitCode) }()
 
-	if len(os.Args) != 2 {
-		exitCode = 1
-		usage()
-		return
-	}
+	flag.BoolVar(&Quiet, "quiet", false, "")
+	flag.Parse()
 
-	cmd, ok := Commands[os.Args[1]]
+	cmd, ok := Commands[flag.Arg(0)]
 	if !ok {
 		exitCode = 1
 		usage()
