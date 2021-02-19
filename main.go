@@ -225,7 +225,7 @@ func Help() error {
 
 func Kill() error {
 	if !serverRunning() {
-		return errors.New("server is not running!")
+		return errors.New("server is not running")
 	}
 
 	pid, err := pidfileContents(PidFile)
