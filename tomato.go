@@ -86,15 +86,15 @@ func (s *State) IsDone() bool {
 	return s.tomato == nil
 }
 
-type RPCServer struct {
+type Server struct {
 	tomato Tomato
 }
 
-func NewRPCServer(tomato Tomato) *RPCServer {
-	return &RPCServer{tomato: tomato}
+func NewServer(tomato Tomato) *Server {
+	return &Server{tomato: tomato}
 }
 
-func (s *RPCServer) Start(args int, reply *time.Time) error {
+func (s *Server) Start(args int, reply *time.Time) error {
 	log.Printf("got Start")
 
 	endTime, err := s.tomato.Start()
@@ -103,7 +103,7 @@ func (s *RPCServer) Start(args int, reply *time.Time) error {
 	return err
 }
 
-func (s *RPCServer) Stop(args int, reply *time.Duration) error {
+func (s *Server) Stop(args int, reply *time.Duration) error {
 	log.Printf("got Stop")
 
 	*reply = s.tomato.Stop()
@@ -111,7 +111,7 @@ func (s *RPCServer) Stop(args int, reply *time.Duration) error {
 	return nil
 }
 
-func (s *RPCServer) Remaining(args int, reply *time.Duration) error {
+func (s *Server) Remaining(args int, reply *time.Duration) error {
 	log.Printf("got Remaining")
 
 	*reply = s.tomato.Remaining()
@@ -119,7 +119,7 @@ func (s *RPCServer) Remaining(args int, reply *time.Duration) error {
 	return nil
 }
 
-func (s *RPCServer) IsDone(args int, reply *bool) error {
+func (s *Server) IsDone(args int, reply *bool) error {
 	log.Printf("got IsDone")
 
 	*reply = s.tomato.IsDone()
@@ -127,41 +127,41 @@ func (s *RPCServer) IsDone(args int, reply *bool) error {
 	return nil
 }
 
-type RPCClient struct {
+type Client struct {
 	client *rpc.Client
 }
 
-func NewClient(socket string) (*RPCClient, error) {
+func NewClient(socket string) (*Client, error) {
 	client, err := rpc.DialHTTP("unix", socket)
 	if err != nil {
 		return nil, err
 	}
 
-	return &RPCClient{client: client}, nil
+	return &Client{client: client}, nil
 }
 
-func (c *RPCClient) Start() (time.Time, error) {
+func (c *Client) Start() (time.Time, error) {
 	var endsAt time.Time
 	err := c.client.Call("Tomato.Start", 0, &endsAt)
 
 	return endsAt, err
 }
 
-func (c *RPCClient) Stop() (time.Duration, error) {
+func (c *Client) Stop() (time.Duration, error) {
 	var left time.Duration
 	err := c.client.Call("Tomato.Stop", 0, &left)
 
 	return left, err
 }
 
-func (c *RPCClient) Remaining() (time.Duration, error) {
+func (c *Client) Remaining() (time.Duration, error) {
 	var left time.Duration
 	err := c.client.Call("Tomato.Remaining", 0, &left)
 
 	return left, err
 }
 
-func (c *RPCClient) IsDone() (bool, error) {
+func (c *Client) IsDone() (bool, error) {
 	var done bool
 	err := c.client.Call("Tomato.IsDone", 0, &done)
 
@@ -217,7 +217,7 @@ var Commands map[string]func() error = map[string]func() error{
 	"done":      WithClient(Done),
 	"server":    Server}
 
-func WithClient(f func(*RPCClient) error) func() error {
+func WithClient(f func(*Client) error) func() error {
 	return func() error {
 		client, err := client()
 		if err != nil {
@@ -228,7 +228,7 @@ func WithClient(f func(*RPCClient) error) func() error {
 	}
 }
 
-func Start(c *RPCClient) error {
+func Start(c *Client) error {
 	finish, err := c.Start()
 	if err != nil {
 		return err
@@ -238,7 +238,7 @@ func Start(c *RPCClient) error {
 	return nil
 }
 
-func Stop(c *RPCClient) error {
+func Stop(c *Client) error {
 	left, err := c.Stop()
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func Stop(c *RPCClient) error {
 	return nil
 }
 
-func Remaining(c *RPCClient) error {
+func Remaining(c *Client) error {
 	left, err := c.Remaining()
 	if err != nil {
 		return err
@@ -267,7 +267,7 @@ func Remaining(c *RPCClient) error {
 
 var ErrNotDone = errors.New("not done")
 
-func Done(c *RPCClient) error {
+func Done(c *Client) error {
 	ok, err := c.IsDone()
 	if err != nil {
 		return err
@@ -305,7 +305,7 @@ func Server() error {
 
 	log.Printf("Starting server at [%s]...", Socket)
 
-	server := NewRPCServer(NewState())
+	server := NewServer(NewState())
 	rpc.RegisterName("Tomato", server)
 	rpc.HandleHTTP()
 
@@ -335,7 +335,7 @@ func Server() error {
 	}
 }
 
-func client() (*RPCClient, error) {
+func client() (*Client, error) {
 	log.SetFlags(0)
 	log.SetPrefix(LogPrefix)
 
