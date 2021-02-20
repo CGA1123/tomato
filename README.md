@@ -1,10 +1,6 @@
-# 🍅 tomato
-
-`tomato` allows you to create a tomato timer, running in the background.
-
 ![tomato](images/tomato.jpg)
 
-## `tomato`
+# `tomato`
 
 Install: `go get github.com/CGA1123/tomato`
 
