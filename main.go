@@ -27,6 +27,17 @@ var (
 	LogFile            = "/tmp/tomato.log"
 	PidFile            = "/tmp/tomato.pid"
 	LogPrefix          = "🍅 "
+	Quiet              = false
+	ErrNotRunning      = errors.New("not running")
+	Commands           = map[string]func() error{
+		"start":     WithClient(Start),
+		"stop":      WithClient(Stop),
+		"remaining": WithClient(Remaining),
+		"running":   WithClient(Running),
+		"kill":      Kill,
+		"up":        Up,
+		"server":    Server,
+		"help":      Help}
 )
 
 type Tomato struct {
@@ -197,18 +208,6 @@ func pidIsRunning(pid int) bool {
 	return true
 }
 
-var Commands map[string]func() error = map[string]func() error{
-	"start":     WithClient(Start),
-	"stop":      WithClient(Stop),
-	"remaining": WithClient(Remaining),
-	"running":   WithClient(Running),
-	"kill":      Kill,
-	"server":    Server,
-	"help":      Help}
-
-var Quiet = false
-var ErrNotRunning = errors.New("not running")
-
 func WithClient(f func(*Client) error) func() error {
 	return func() error {
 		client, err := client()
@@ -222,6 +221,14 @@ func WithClient(f func(*Client) error) func() error {
 
 func Help() error {
 	usage()
+	return nil
+}
+
+func Up() error {
+	if !serverRunning() {
+		return ErrNotRunning
+	}
+
 	return nil
 }
 
@@ -388,7 +395,7 @@ func client() (*Client, error) {
 }
 
 func usage() {
-	log.Printf("usage: tomato [-quiet] {start,stop,remaining,server,running,kill,help}")
+	log.Printf("usage: tomato [-quiet] {start,stop,remaining,server,running,kill,up,help}")
 }
 
 func main() {
