@@ -13,6 +13,7 @@ There are a couple of subcommands:
 - `running`: returns exit code `33` if the timer is not running, `0` otherwise
 - `server`: starts the tomato server
 - `kill`: kills the tomato server
+- `up`: returns exit code `33` if the tomato server is not up, `0` otherwise
 
 ## How it works
 
