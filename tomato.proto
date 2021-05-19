@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package tomato.pb;
+
+option go_package = "github.com/cga1123/tomato/pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
+
+service TomatoService {
+  rpc Start(google.protobuf.Empty) returns (google.protobuf.Timestamp) {}
+  rpc Stop(google.protobuf.Empty) returns (google.protobuf.Duration) {}
+  rpc Remaining(google.protobuf.Empty) returns (google.protobuf.Duration) {}
+  rpc Running(google.protobuf.Empty) returns (google.protobuf.BoolValue) {}
+}

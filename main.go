@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/rpc"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,7 +17,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/CGA1123/tomato/pb"
 	"github.com/soellman/pidfile"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 var (
@@ -40,26 +46,15 @@ var (
 		"help":      Help}
 )
 
-type Tomato struct {
+type tomatoServiceServer struct {
+	pb.UnimplementedTomatoServiceServer
+
 	mut    sync.Mutex
 	ends   time.Time
 	tomato *time.Timer
 }
 
-func NewTomato() *Tomato {
-	return &Tomato{}
-}
-
-func (s *Tomato) do(action string, f func() error) error {
-	s.mut.Lock()
-	defer s.mut.Unlock()
-
-	log.Printf("Got %s", action)
-
-	return f()
-}
-
-func (s *Tomato) stop() time.Duration {
+func (s *tomatoServiceServer) stop() time.Duration {
 	if s.tomato == nil {
 		return time.Duration(0)
 	}
@@ -72,7 +67,7 @@ func (s *Tomato) stop() time.Duration {
 	return remaining
 }
 
-func (s *Tomato) start() (time.Time, error) {
+func (s *tomatoServiceServer) start() (time.Time, error) {
 	if s.tomato != nil {
 		return time.Now(), ErrTomatoIsRunning
 	}
@@ -83,87 +78,87 @@ func (s *Tomato) start() (time.Time, error) {
 	return s.ends, nil
 }
 
-func (s *Tomato) remaining() time.Duration {
+func (s *tomatoServiceServer) remaining() time.Duration {
 	if s.tomato == nil {
 		return time.Duration(0)
 	}
 
 	return time.Until(s.ends)
 }
+func (s *tomatoServiceServer) Start(ctx context.Context, _ *emptypb.Empty) (*timestamppb.Timestamp, error) {
+	s.mut.Lock()
+	defer s.mut.Unlock()
 
-func (s *Tomato) Start(args int, reply *time.Time) error {
-	return s.do("Start", func() error {
-		ends, err := s.start()
+	ends, err := s.start()
 
-		*reply = ends
+	return timestamppb.New(ends), err
 
-		return err
-	})
 }
 
-func (s *Tomato) Stop(args int, reply *time.Duration) error {
-	return s.do("Stop", func() error {
-		*reply = s.stop()
+func (s *tomatoServiceServer) Stop(ctx context.Context, _ *emptypb.Empty) (*durationpb.Duration, error) {
+	s.mut.Lock()
+	defer s.mut.Unlock()
 
-		return nil
-	})
+	return durationpb.New(s.stop()), nil
 }
 
-func (s *Tomato) Remaining(args int, reply *time.Duration) error {
-	return s.do("Remaining", func() error {
-		*reply = s.remaining()
+func (s *tomatoServiceServer) Running(ctx context.Context, _ *emptypb.Empty) (*wrapperspb.BoolValue, error) {
+	running := s.tomato != nil
 
-		return nil
-	})
+	return wrapperspb.Bool(running), nil
 }
 
-func (s *Tomato) Running(args int, reply *bool) error {
-	return s.do("Running", func() error {
-		*reply = s.tomato != nil
-
-		return nil
-	})
+func (s *tomatoServiceServer) Remaining(ctx context.Context, _ *emptypb.Empty) (*durationpb.Duration, error) {
+	return durationpb.New(s.remaining()), nil
 }
 
 type Client struct {
-	client *rpc.Client
+	client pb.TomatoServiceClient
 }
 
 func NewClient(socket string) (*Client, error) {
-	client, err := rpc.DialHTTP("unix", socket)
+	conn, err := grpc.Dial("unix://"+socket, grpc.WithInsecure())
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{client: client}, nil
+	return &Client{client: pb.NewTomatoServiceClient(conn)}, nil
 }
 
 func (c *Client) Start() (time.Time, error) {
-	var endsAt time.Time
-	err := c.client.Call("Tomato.Start", 0, &endsAt)
+	endsAt, err := c.client.Start(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return time.Now(), err
+	}
 
-	return endsAt, err
+	return endsAt.AsTime(), err
 }
 
 func (c *Client) Stop() (time.Duration, error) {
-	var left time.Duration
-	err := c.client.Call("Tomato.Stop", 0, &left)
+	left, err := c.client.Stop(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return time.Duration(0), err
+	}
 
-	return left, err
+	return left.AsDuration(), err
 }
 
 func (c *Client) Remaining() (time.Duration, error) {
-	var left time.Duration
-	err := c.client.Call("Tomato.Remaining", 0, &left)
+	left, err := c.client.Remaining(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return time.Duration(0), err
+	}
 
-	return left, err
+	return left.AsDuration(), err
 }
 
 func (c *Client) Running() (bool, error) {
-	var running bool
-	err := c.client.Call("Tomato.Running", 0, &running)
+	running, err := c.client.Running(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return false, err
+	}
 
-	return running, err
+	return running.GetValue(), err
 }
 
 func serverRunning() bool {
@@ -347,20 +342,19 @@ func Server() error {
 	log.SetPrefix(LogPrefix)
 	log.Printf("Starting server at [%s]...", Socket)
 
-	server := NewTomato()
-	rpc.Register(server)
-	rpc.HandleHTTP()
-
 	listener, err := net.Listen("unix", Socket)
 	if err != nil {
 		return fmt.Errorf("error opening socket: %w", err)
 	}
 
+	server := grpc.NewServer()
+	pb.RegisterTomatoServiceServer(server, &tomatoServiceServer{})
+
 	errorC := make(chan error, 1)
 	shutdownC := make(chan os.Signal, 1)
 
 	go func(errC chan<- error) {
-		errorC <- http.Serve(listener, nil)
+		errorC <- server.Serve(listener)
 	}(errorC)
 
 	signal.Notify(shutdownC, syscall.SIGINT, syscall.SIGTERM)
@@ -415,7 +409,6 @@ func main() {
 	if err := cmd(); err != nil {
 		if err == ErrNotRunning {
 			exitCode = 33
-			return
 		}
 
 		log.Printf("error: %v", err)
