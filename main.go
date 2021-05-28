@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,152 +12,75 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/CGA1123/tomato/client"
 	"github.com/CGA1123/tomato/pb"
+	"github.com/CGA1123/tomato/server"
 	"github.com/soellman/pidfile"
+	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 var (
-	Duration           = 25 * time.Minute
-	ErrTomatoIsRunning = fmt.Errorf("tomato is still runnning")
-	Socket             = "/tmp/tomato.sock"
-	LogFile            = "/tmp/tomato.log"
-	PidFile            = "/tmp/tomato.pid"
-	LogPrefix          = "🍅 "
-	Quiet              = false
-	ErrNotRunning      = errors.New("not running")
-	Commands           = map[string]func() error{
-		"start":     WithClient(Start),
-		"stop":      WithClient(Stop),
-		"remaining": WithClient(Remaining),
-		"running":   WithClient(Running),
-		"kill":      Kill,
-		"up":        Up,
-		"server":    Server,
-		"help":      Help}
+	Socket        = "/tmp/tomato.sock"
+	LogFile       = "/tmp/tomato.log"
+	PidFile       = "/tmp/tomato.pid"
+	LogPrefix     = "🍅 "
+	Quiet         = false
+	ErrNotRunning = errors.New("not running")
 )
 
-type tomatoServiceServer struct {
-	pb.UnimplementedTomatoServiceServer
-
-	mut    sync.Mutex
-	ends   time.Time
-	tomato *time.Timer
-}
-
-func (s *tomatoServiceServer) stop() time.Duration {
-	if s.tomato == nil {
-		return time.Duration(0)
-	}
-
-	remaining := s.remaining()
-
-	s.tomato = nil
-	s.ends = time.Now()
-
-	return remaining
-}
-
-func (s *tomatoServiceServer) start() (time.Time, error) {
-	if s.tomato != nil {
-		return time.Now(), ErrTomatoIsRunning
-	}
-
-	s.tomato = time.AfterFunc(Duration, func() { s.stop() })
-	s.ends = time.Now().Add(Duration)
-
-	return s.ends, nil
-}
-
-func (s *tomatoServiceServer) remaining() time.Duration {
-	if s.tomato == nil {
-		return time.Duration(0)
-	}
-
-	return time.Until(s.ends)
-}
-func (s *tomatoServiceServer) Start(ctx context.Context, _ *emptypb.Empty) (*timestamppb.Timestamp, error) {
-	s.mut.Lock()
-	defer s.mut.Unlock()
-
-	ends, err := s.start()
-
-	return timestamppb.New(ends), err
-
-}
-
-func (s *tomatoServiceServer) Stop(ctx context.Context, _ *emptypb.Empty) (*durationpb.Duration, error) {
-	s.mut.Lock()
-	defer s.mut.Unlock()
-
-	return durationpb.New(s.stop()), nil
-}
-
-func (s *tomatoServiceServer) Running(ctx context.Context, _ *emptypb.Empty) (*wrapperspb.BoolValue, error) {
-	running := s.tomato != nil
-
-	return wrapperspb.Bool(running), nil
-}
-
-func (s *tomatoServiceServer) Remaining(ctx context.Context, _ *emptypb.Empty) (*durationpb.Duration, error) {
-	return durationpb.New(s.remaining()), nil
-}
-
-type Client struct {
-	client pb.TomatoServiceClient
-}
-
-func NewClient(socket string) (*Client, error) {
-	conn, err := grpc.Dial("unix://"+socket, grpc.WithInsecure())
+func main() {
+	cmd := Cmd()
+	err := cmd.ExecuteContext(context.Background())
 	if err != nil {
-		return nil, err
-	}
+		fmt.Printf("Error: %v", err)
+		if err == ErrNotRunning {
+			os.Exit(33)
+		}
 
-	return &Client{client: pb.NewTomatoServiceClient(conn)}, nil
+		os.Exit(1)
+	}
 }
 
-func (c *Client) Start() (time.Time, error) {
-	endsAt, err := c.client.Start(context.Background(), &emptypb.Empty{})
-	if err != nil {
-		return time.Now(), err
+func Cmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:           "tomato",
+		Short:         "tomato is a tomato timer for your terminal!",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
-	return endsAt.AsTime(), err
+	rootCmd.AddCommand(
+		serve(),
+		kill(),
+		up(),
+		start(),
+		stop(),
+		running(),
+		remaining(),
+	)
+
+	return rootCmd
 }
 
-func (c *Client) Stop() (time.Duration, error) {
-	left, err := c.client.Stop(context.Background(), &emptypb.Empty{})
-	if err != nil {
-		return time.Duration(0), err
+func WithClient(f func(*client.Client) error) error {
+	log.SetFlags(0)
+	log.SetPrefix(LogPrefix)
+
+	if !serverRunning() {
+		return errors.New("tomato server is not running")
 	}
 
-	return left.AsDuration(), err
-}
-
-func (c *Client) Remaining() (time.Duration, error) {
-	left, err := c.client.Remaining(context.Background(), &emptypb.Empty{})
+	c, err := client.New(Socket)
 	if err != nil {
-		return time.Duration(0), err
+		log.Printf("is the server running? start it with tomato server")
+		return fmt.Errorf("error creating client: %w", err)
 	}
 
-	return left.AsDuration(), err
-}
-
-func (c *Client) Running() (bool, error) {
-	running, err := c.client.Running(context.Background(), &emptypb.Empty{})
-	if err != nil {
-		return false, err
-	}
-
-	return running.GetValue(), err
+	return f(c)
 }
 
 func serverRunning() bool {
@@ -203,216 +125,212 @@ func pidIsRunning(pid int) bool {
 	return true
 }
 
-func WithClient(f func(*Client) error) func() error {
-	return func() error {
-		client, err := client()
-		if err != nil {
-			return err
-		}
+func remaining() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remaining",
+		Short: "Returns how long is left on the current tomato.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return WithClient(func(c *client.Client) error {
+				left, err := c.Remaining()
+				if err != nil {
+					return err
+				}
 
-		return f(client)
+				if left == time.Duration(0) {
+					if Quiet {
+						fmt.Println("0")
+					} else {
+						log.Printf("the clock was not running!")
+						log.Printf("use `tomato start` to get going.")
+					}
+					return nil
+				}
+
+				minutes := left.Round(time.Minute).Minutes()
+
+				if Quiet {
+					fmt.Printf("%.0f\n", minutes)
+				} else {
+					log.Printf("there are %.0f minutes left on the clock!", minutes)
+				}
+				return nil
+			})
+		},
 	}
 }
 
-func Help() error {
-	usage()
-	return nil
-}
+func running() *cobra.Command {
+	return &cobra.Command{
+		Use:   "runnning",
+		Short: "Checks whether there is a current tomato running.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return WithClient(func(c *client.Client) error {
+				running, err := c.Running()
+				if err != nil {
+					return err
+				}
 
-func Up() error {
-	if !serverRunning() {
-		return ErrNotRunning
-	}
+				if !running {
+					return ErrNotRunning
+				}
 
-	return nil
-}
-
-func Kill() error {
-	if !serverRunning() {
-		return errors.New("server is not running")
-	}
-
-	pid, err := pidfileContents(PidFile)
-	if err != nil {
-		return nil
-	}
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return nil
-	}
-
-	return process.Signal(syscall.SIGTERM)
-}
-
-func Running(c *Client) error {
-	running, err := c.Running()
-	if err != nil {
-		return err
-	}
-
-	if !running {
-		return ErrNotRunning
-	}
-
-	return nil
-}
-
-func Start(c *Client) error {
-	finish, err := c.Start()
-	if err != nil {
-		return err
-	}
-
-	fmtd := finish.Format("15:04")
-	if Quiet {
-		fmt.Println(fmtd)
-	} else {
-		log.Printf("timer will finish at %v", fmtd)
-	}
-
-	return nil
-}
-
-func Stop(c *Client) error {
-	left, err := c.Stop()
-	if err != nil {
-		return err
-	}
-
-	minutes := left.Round(time.Minute).Minutes()
-
-	if Quiet {
-		fmt.Printf("%.0f\n", minutes)
-	} else {
-		log.Printf("there was %.0f minute(s) left on the clock!", minutes)
-	}
-
-	return nil
-}
-
-func Remaining(c *Client) error {
-	left, err := c.Remaining()
-	if err != nil {
-		return err
-	}
-
-	if left == time.Duration(0) {
-		if Quiet {
-			fmt.Println("0")
-		} else {
-			log.Printf("the clock was not running!")
-			log.Printf("use `tomato start` to get going.")
-		}
-		return nil
-	}
-
-	minutes := left.Round(time.Minute).Minutes()
-
-	if Quiet {
-		fmt.Printf("%.0f\n", minutes)
-	} else {
-		log.Printf("there are %.0f minutes left on the clock!", minutes)
-	}
-	return nil
-}
-
-func Server() error {
-	if err := pidfile.WriteControl(PidFile, os.Getpid(), true); err != nil {
-		return err
-	}
-
-	f, err := os.Create(LogFile)
-	if err != nil {
-		log.Printf("error creating logfile: %v", err)
-	}
-
-	defer func() {
-		log.Printf("Shutting down...")
-		log.Printf("Removing pidfile...")
-		pidfile.Remove(PidFile)
-		log.Printf("Removing socket...")
-		os.RemoveAll(Socket)
-		log.Printf("👋")
-		f.Close()
-	}()
-
-	log.Printf("Will write logs to: %v", LogFile)
-	log.SetOutput(f)
-	log.SetPrefix(LogPrefix)
-	log.Printf("Starting server at [%s]...", Socket)
-
-	listener, err := net.Listen("unix", Socket)
-	if err != nil {
-		return fmt.Errorf("error opening socket: %w", err)
-	}
-
-	server := grpc.NewServer()
-	pb.RegisterTomatoServiceServer(server, &tomatoServiceServer{})
-
-	errorC := make(chan error, 1)
-	shutdownC := make(chan os.Signal, 1)
-
-	go func(errC chan<- error) {
-		errorC <- server.Serve(listener)
-	}(errorC)
-
-	signal.Notify(shutdownC, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case err := <-errorC:
-		if err != nil && err != http.ErrServerClosed {
-			return err
-		}
-
-		return err
-	case <-shutdownC:
-		return nil
+				return nil
+			})
+		},
 	}
 }
 
-func client() (*Client, error) {
-	log.SetFlags(0)
-	log.SetPrefix(LogPrefix)
+func stop() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the currently running tomato.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return WithClient(func(c *client.Client) error {
+				left, err := c.Stop()
+				if err != nil {
+					return err
+				}
 
-	if !serverRunning() {
-		return nil, errors.New("tomato server is not running")
+				minutes := left.Round(time.Minute).Minutes()
+
+				if Quiet {
+					fmt.Printf("%.0f\n", minutes)
+				} else {
+					log.Printf("there was %.0f minute(s) left on the clock!", minutes)
+				}
+
+				return nil
+			})
+		},
 	}
-
-	c, err := NewClient(Socket)
-	if err != nil {
-		log.Printf("is the server running? start it with tomato server")
-		return nil, fmt.Errorf("error creating client: %w", err)
-	}
-
-	return c, err
 }
 
-func usage() {
-	log.Printf("usage: tomato [-quiet] {start,stop,remaining,server,running,kill,up,help}")
+func start() *cobra.Command {
+	return &cobra.Command{
+		Use:   "start",
+		Short: "Starts a tomato timer",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return WithClient(func(c *client.Client) error {
+				finish, err := c.Start()
+				if err != nil {
+					return err
+				}
+
+				fmtd := finish.Format("15:04")
+				if Quiet {
+					fmt.Println(fmtd)
+				} else {
+					log.Printf("timer will finish at %v", fmtd)
+				}
+
+				return nil
+
+			})
+		},
+	}
 }
 
-func main() {
-	var exitCode int
-	defer func() { os.Exit(exitCode) }()
+func serve() *cobra.Command {
+	return &cobra.Command{
+		Use:   "server",
+		Short: "Starts the tomato server.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := pidfile.WriteControl(PidFile, os.Getpid(), true); err != nil {
+				return err
+			}
 
-	flag.BoolVar(&Quiet, "quiet", false, "")
-	flag.Parse()
+			f, err := os.Create(LogFile)
+			if err != nil {
+				log.Printf("error creating logfile: %v", err)
+			}
 
-	cmd, ok := Commands[flag.Arg(0)]
-	if !ok {
-		exitCode = 1
-		usage()
-		return
+			defer func() {
+				log.Printf("Shutting down...")
+				log.Printf("Removing pidfile...")
+				pidfile.Remove(PidFile)
+				log.Printf("Removing socket...")
+				os.RemoveAll(Socket)
+				log.Printf("👋")
+				f.Close()
+			}()
+
+			log.Printf("Will write logs to: %v", LogFile)
+			log.SetOutput(f)
+			log.SetPrefix(LogPrefix)
+			log.Printf("Starting server at [%s]...", Socket)
+
+			listener, err := net.Listen("unix", Socket)
+			if err != nil {
+				return fmt.Errorf("error opening socket: %w", err)
+			}
+
+			srv := grpc.NewServer()
+			pb.RegisterTomatoServiceServer(srv, server.New())
+
+			errorC := make(chan error, 1)
+			shutdownC := make(chan os.Signal, 1)
+
+			go func(errC chan<- error) {
+				errorC <- srv.Serve(listener)
+			}(errorC)
+
+			signal.Notify(shutdownC, syscall.SIGINT, syscall.SIGTERM)
+
+			select {
+			case err := <-errorC:
+				if err != nil && err != http.ErrServerClosed {
+					return err
+				}
+
+				return err
+			case <-shutdownC:
+				return nil
+			}
+		},
 	}
+}
 
-	if err := cmd(); err != nil {
-		if err == ErrNotRunning {
-			exitCode = 33
-		}
+func up() *cobra.Command {
+	return &cobra.Command{
+		Use:   "up",
+		Short: "Check whether the tomato server is up",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !serverRunning() {
+				return ErrNotRunning
+			}
 
-		log.Printf("error: %v", err)
-		exitCode = 1
-		return
+			return nil
+		},
+	}
+}
+
+func kill() *cobra.Command {
+	return &cobra.Command{
+		Use:   "kill",
+		Short: "Kill the tomato server.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !serverRunning() {
+				return errors.New("server is not running")
+			}
+
+			pid, err := pidfileContents(PidFile)
+			if err != nil {
+				return nil
+			}
+
+			process, err := os.FindProcess(pid)
+			if err != nil {
+				return nil
+			}
+
+			return process.Signal(syscall.SIGTERM)
+		},
 	}
 }
